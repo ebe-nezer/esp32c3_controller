@@ -23,7 +23,12 @@ import useBluetooth from "../hooks/useBluetooth";
 import { openSettings } from "react-native-permissions";
 
 export default function App() {
-  const { isBluetoothEnabled } = useBluetooth();
+  const {
+    isBluetoothEnabled,
+    isConnected,
+    error,
+    isConnecting: establishing,
+  } = useBluetooth();
   const {
     scanning,
     setScanning,
@@ -152,14 +157,25 @@ export default function App() {
     <SafeAreaView style={{ flex: 1, backgroundColor: "white" }}>
       <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
         <Text>Not Connected</Text>
-        <Button
-          onPress={() => {
-            // router.reload(); --- IGNORE ---
-            openSettings();
-          }}
-        >
-          Open Settings
-        </Button>
+        {!isBluetoothEnabled && (
+          <Button
+            onPress={() => {
+              // router.reload(); --- IGNORE ---
+              openSettings();
+            }}
+          >
+            Open Settings
+          </Button>
+        )}
+        {error && !isBluetoothEnabled && (
+          <Text style={{ color: "red", marginTop: 10 }}>{error}</Text>
+        )}
+        {establishing && (
+          <Text style={{ marginTop: 10 }}>Establishing connection...</Text>
+        )}
+        {isConnected && (
+          <Text style={{ marginTop: 10 }}>Bluetooth Connection Successful</Text>
+        )}
       </View>
     </SafeAreaView>
   ) : (
@@ -236,13 +252,6 @@ export default function App() {
               onControl={handleNext}
             />
           </Animated.View>
-          <Button
-            onPress={() => {
-              router.push("/device");
-            }}
-          >
-            Redirect
-          </Button>
         </View>
       </Animated.View>
     </SafeAreaView>
