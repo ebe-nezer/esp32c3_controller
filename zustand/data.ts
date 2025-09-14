@@ -5,19 +5,31 @@ type DataStorage = {
   steering: number;
   PRND: "R" | "D";
   forklift: number;
-  setForklift: (value: number) => void;
-  setPRND: (value: "R" | "D") => void;
-  setThrottle: (value: number) => void;
-  setSteering: (value: number) => void;
+  setForklift: (value: number, cb?: () => void) => void;
+  setPRND: (value: "R" | "D", cb?: () => void) => void;
+  setThrottle: (value: number, cb?: () => void) => void;
+  setSteering: (value: number, cb?: () => void) => void;
 };
 
 export const useDataStore = create<DataStorage>()((set) => ({
   throttle: 0,
   steering: 0,
   PRND: "D",
-  forklift: 0,
-  setForklift: (value) => set({ forklift: value }),
-  setPRND: (value) => set({ PRND: value }),
-  setThrottle: (value) => set({ throttle: value }),
-  setSteering: (value) => set({ steering: value }),
+  forklift: 33,
+  setForklift: (value, cb) => {
+    set(({}) => ({ forklift: value }));
+    cb?.();
+  },
+  setPRND: (value, cb) => {
+    set({ PRND: value });
+    cb?.();
+  },
+  setThrottle: (value, cb) => {
+    set({ throttle: value });
+    cb?.();
+  },
+  setSteering: (value, cb) => {
+    set({ steering: value });
+    cb?.();
+  },
 }));

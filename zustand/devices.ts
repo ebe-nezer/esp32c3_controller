@@ -14,7 +14,8 @@ export const useDeviceStore = create<DeviceStore>()((set) => ({
   devices: new Map(),
   addDevice: (device) =>
     set((state) => {
-      const newMap = new Map(state.devices);
+      const newMap = new Map();
+      state.devices.forEach((v, k) => newMap.set(k, v));
       newMap.set(device.id, device);
       return { devices: newMap };
     }),
@@ -23,7 +24,7 @@ export const useDeviceStore = create<DeviceStore>()((set) => ({
       const newMap = new Map(state.devices);
       if (!state.connectedDevice) return state;
       newMap.delete(state.connectedDevice.id);
-      return { devices: newMap };
+      return { devices: newMap, connectedDevice: null };
     }),
   clearDevices: () => set({ devices: new Map() }),
   connectedDevice: null,

@@ -24,7 +24,7 @@ const Speedometer = ({
   max,
   min = -40,
   angle,
-  width = 100,
+  width = 200,
   height,
 }: Props) => {
   const { fonts, colors } = useTheme();
