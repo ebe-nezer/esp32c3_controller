@@ -1,8 +1,14 @@
 import { ConfigContext, ExpoConfig } from "@expo/config";
 import { version } from "./package.json";
 
-const isProduction = process.env.NODE_ENV === "production";
-const isPreview = process.env.NODE_ENV === "preview";
+const NODE_ENV = process.env.NODE_ENV as
+  | "development"
+  | "production"
+  | "test"
+  | "preview"
+  | undefined;
+const isProduction = NODE_ENV === "production";
+const isPreview = NODE_ENV === "preview";
 const EAS_PROJECT_ID = "1bc4d138-87d8-40c0-a66e-5ca99bc89e7c";
 const SCHEME = "rnble";
 const ICON = "./assets/ios-dark.png";
@@ -44,6 +50,11 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       image: "./assets/splash-icon-dark.png",
       resizeMode: "contain",
       backgroundColor: "#ffffff",
+      dark: {
+        image: "./assets/splash-icon-dark.png",
+        resizeMode: "contain",
+        backgroundColor: "#000000",
+      },
     },
     primaryColor: "#6200ee",
     updates: {
@@ -60,6 +71,11 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         image: ICON,
         resizeMode: "contain",
         backgroundColor: "#ffffff",
+        dark: {
+          image: ICON,
+          resizeMode: "contain",
+          backgroundColor: "#000000",
+        },
       },
       buildNumber: version,
       infoPlist: {
@@ -112,7 +128,19 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     plugins: [
       "expo-router",
       "expo-font",
-      "expo-splash-screen",
+      [
+        "expo-splash-screen",
+        {
+          image: "./assets/splash-icon-dark.png",
+          resizeMode: "contain",
+          backgroundColor: "#000000",
+          dark: {
+            image: "./assets/splash-icon-dark.png",
+            resizeMode: "contain",
+            backgroundColor: "#000000",
+          },
+        },
+      ],
       "expo-updates",
       "expo-secure-store",
       [
@@ -137,5 +165,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         },
       ],
     ],
+    experiments: {
+      typedRoutes: true,
+      reactCanary: true,
+    },
   };
 };
