@@ -149,7 +149,7 @@ export default function App() {
     if (!isConnected) {
       removeDevice();
       if (router.canGoBack()) router.back();
-      else router.replace("/");
+      else router.replace("/home");
     }
   }, [isConnected]);
 
