@@ -1,25 +1,17 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
-  Button,
   View,
   Text,
-  TextInput,
   StyleSheet,
   StatusBar,
   TouchableNativeFeedback,
   BackHandler,
-  Dimensions,
 } from "react-native";
 import { BLEServiceFactory } from "../utils/ble";
 import { useDataStore, useDeviceStore } from "../zustand";
 import { Buffer } from "buffer";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { router } from "expo-router";
-import Steering from "../components/ui/steering";
-import {
-  SafeAreaView,
-  useSafeAreaInsets,
-} from "react-native-safe-area-context";
 import { Chip } from "react-native-paper";
 import Icon from "react-native-vector-icons/AntDesign";
 import {
@@ -33,111 +25,139 @@ import Animated from "react-native-reanimated";
 import RealisticSteeringWheel from "../components/ui/steering";
 import Slider from "../components/ui/slider";
 import Fab from "../components/ui/prnd";
-import { Characteristic } from "react-native-ble-plx";
-import Speedometer from "../components/ui/speedometer";
 
-const WRITE_UUID = "abcdefab-1234-5678-1234-abcdefabcdef";
-const NOTIFY_UUID = "fedcba98-4321-4321-4321-abcdefabcdef";
+import { Characteristic } from "react-native-ble-plx";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+// UUIDs for BLE service and characteristics
+const UUIDS = {
+  SERVICE: "12345678-1234-1234-1234-123456789abc",
+  THROTTLE: "aaaabbbb-1111-2222-3333-aaaaaaaaaaaa",
+  STEERING: "bbbbaaaa-2222-3333-1111-bbbbbbbbbbbb",
+  FORKLIFT: "ccccdddd-3333-4444-1111-cccccccccccc",
+};
 
 const enter = FadeInDown.springify(16).damping(16);
 const exit = FadeOutDown.springify(16).damping(16);
 
 export default function App() {
+  // Reference for BLE characteristics
+  const chars = useRef<{ [k: string]: Characteristic | null }>({});
+
+  // Device and connection management
   const { connectedDevice, removeDevice } = useDeviceStore();
-  const [writeChar, setWriteChar] = useState<Characteristic | null>(null);
   const [isConnected, setIsConnected] = useState(true);
   const bleService = BLEServiceFactory.createService("ESP32C3");
   const monitorSub = useRef<any>(null);
 
-  const {
-    setThrottle,
-    setForklift,
-    setPRND,
-    setSteering,
-    throttle,
-    forklift,
-    PRND,
-    steering,
-  } = useDataStore();
+  // App local state store
+  const { setData, PRND } = useDataStore();
 
-  useEffect(() => {
-    useDataStore.subscribe((state) => {
-      sendRealTimeData();
-    });
-  }, []);
-
-  const sendRealTimeData = useCallback(() => {
-    if (!writeChar) return;
-    const values = {
-      steering: parseInt(`${steering}`),
-      throttle: parseInt(`${throttle}`),
-      prnd: PRND,
-      forklift: parseInt(`${forklift}`),
-    };
-    let payload = "";
-    try {
-      payload = JSON.stringify(values);
-    } catch (error: any) {
-      console.error(`[ERROR] Failed to parse JSON: ${error?.message || error}`);
-      return;
-    }
-    const base64Payload = Buffer.from(payload, "utf-8").toString("base64");
-    writeChar
-      .writeWithoutResponse(base64Payload)
-      .catch((err: Error) => {
-        console.error("Failed to send real-time data:", err);
-      })
-      .then(() => {
-        console.log("Sent data:", values);
-      });
-  }, [writeChar, steering, throttle, forklift]);
-
+  // Effect: connect and discover BLE characteristics
   useEffect(() => {
     let disconnectSub: any = null;
+
     const connectAndDiscover = async () => {
-      if (!connectedDevice) return;
+      if (!connectedDevice) return console.warn("No connected device");
+
       try {
         const device = await bleService.connectToDevice(connectedDevice.id);
         setIsConnected(true);
-        disconnectSub = device.onDisconnected((error, dev) => {
+
+        disconnectSub = device.onDisconnected(() => {
           setIsConnected(false);
-          setWriteChar(null);
+          chars.current = {};
           if (monitorSub.current) {
             monitorSub.current.remove();
             monitorSub.current = null;
           }
           removeDevice();
         });
+
         await device.discoverAllServicesAndCharacteristics();
+
         const services = await device.services();
         const service = services.find(
-          (s) => s.uuid.toLowerCase() === "12345678-1234-1234-1234-123456789abc"
+          (s) => s.uuid.toLowerCase() === UUIDS.SERVICE
         );
-        if (!service) return;
+        if (!service) return console.warn("Service not found");
+
         const characteristics = await device.characteristicsForService(
           service.uuid
         );
-        const write = characteristics.find(
-          (c) => c.uuid.toLowerCase() === WRITE_UUID
+
+        console.log(
+          "Discovered characteristics count:",
+          characteristics.length
         );
-        if (!write) return;
-        setWriteChar(write);
+
+        const charThrottle = characteristics.find(
+          (c) => c.uuid && c.uuid.toLowerCase() === UUIDS.THROTTLE
+        );
+        const charSteering = characteristics.find(
+          (c) => c.uuid && c.uuid.toLowerCase() === UUIDS.STEERING
+        );
+        const charForklift = characteristics.find(
+          (c) => c.uuid && c.uuid.toLowerCase() === UUIDS.FORKLIFT
+        );
+
+        // Save characteristic references
+        chars.current = {
+          throttle: charThrottle || null,
+          steering: charSteering || null,
+          forklift: charForklift || null,
+        };
+
+        console.log("Discovered characteristics:", {
+          throttle: charThrottle?.uuid,
+          steering: charSteering?.uuid,
+          forklift: charForklift?.uuid,
+        });
       } catch (err) {
         setIsConnected(false);
         console.error(err);
       }
     };
+
     connectAndDiscover();
+
     return () => {
       if (disconnectSub) disconnectSub.remove();
       if (monitorSub.current) {
         monitorSub.current.remove();
-        handleBleDisconnect();
         monitorSub.current = null;
       }
     };
-  }, [connectedDevice]);
+  }, [connectedDevice, bleService, removeDevice]);
 
+  // Handle sending data to BLE characteristic by key
+  const handleSendData = (
+    key: "throttle" | "steering" | "forklift",
+    data: number
+  ) => {
+    console.log(`Sending to ${key}:`, chars.current[key]);
+    const characteristic = chars.current[key];
+    if (!characteristic) {
+      console.warn(`[BLE] Characteristic '${key}' not found. Skipping write.`);
+      return;
+    }
+    try {
+      const valueStr = data.toString();
+      const base64 = Buffer.from(valueStr, "utf-8").toString("base64");
+      characteristic
+        .writeWithoutResponse(base64)
+        .then(() => {
+          console.log("[BLE] Sent base64:", base64, "for", key);
+        })
+        .catch((error: any) => {
+          console.error("[BLE] Write error:", error);
+        });
+    } catch (err) {
+      console.error("[BLE] Send error:", err);
+    }
+  };
+
+  // Lock screen orientation to landscape
   useEffect(() => {
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
     return () => {
@@ -145,18 +165,18 @@ export default function App() {
     };
   }, []);
 
+  // If disconnected, remove device and navigate back/home
   useEffect(() => {
     if (!isConnected) {
       removeDevice();
       if (router.canGoBack()) router.back();
       else router.replace("/home");
     }
-  }, [isConnected]);
+  }, [isConnected, removeDevice]);
 
+  // UI header toggle state and animation
   const insets = useSafeAreaInsets();
-
   const [showHeader, setShowHeader] = useState(true);
-
   const headerTransform = useSharedValue(0);
 
   useEffect(() => {
@@ -168,23 +188,22 @@ export default function App() {
     }
   }, [showHeader]);
 
-  const animateToggle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        {
-          rotate: withTiming(headerTransform.value === 0 ? "-90deg" : "90deg", {
-            duration: 300,
-          }),
-        },
-      ],
-    };
-  });
+  const animateToggle = useAnimatedStyle(() => ({
+    transform: [
+      {
+        rotate: withTiming(headerTransform.value === 0 ? "-90deg" : "90deg", {
+          duration: 300,
+        }),
+      },
+    ],
+  }));
 
+  // BLE disconnect handler
   const handleBleDisconnect = useCallback(async () => {
     if (connectedDevice) {
       await bleService.disconnectFromDevice(connectedDevice.id);
       setIsConnected(false);
-      setWriteChar(null);
+      chars.current = {};
       if (monitorSub.current) {
         monitorSub.current.remove();
         monitorSub.current = null;
@@ -195,6 +214,7 @@ export default function App() {
     }
   }, [connectedDevice, bleService, removeDevice]);
 
+  // Android hardware back handler
   useEffect(() => {
     const handle = BackHandler.addEventListener("hardwareBackPress", () => {
       handleBleDisconnect();
@@ -203,7 +223,7 @@ export default function App() {
     return () => {
       handle.remove();
     };
-  }, []);
+  }, [handleBleDisconnect]);
 
   return (
     <>
@@ -289,6 +309,7 @@ export default function App() {
             </Animated.View>
           )}
         </Animated.View>
+
         <View
           style={[
             styles.controls,
@@ -308,11 +329,13 @@ export default function App() {
             <RealisticSteeringWheel
               size={200}
               onSteer={(e) => {
-                setSteering(e);
+                handleSendData("steering", e);
+                setData({ steering: e });
               }}
             />
           </View>
         </View>
+
         <View
           style={[
             styles.controls,
@@ -335,23 +358,34 @@ export default function App() {
               gap: 12,
             }}
           >
-            <Fab onItemPress={(i, idx) => setPRND(idx)} value={PRND} />
+            <Fab
+              onItemPress={(i, idx) => setData({ PRND: idx })}
+              value={PRND}
+            />
             <Slider
               min={0}
               vertical
               max={100}
-              sendValue={(v) => setThrottle(v)}
+              sendValue={(v) => {
+                handleSendData("throttle", v);
+                setData({ throttle: v });
+              }}
               size={200}
               returnToValue={0}
               initial={0}
             />
           </View>
+
           <Slider
             min={-100}
             max={100}
             vertical={false}
             returnToValue={33}
-            sendValue={(v) => setForklift(v)}
+            sendValue={(v) => {
+              handleSendData("forklift", v);
+              setData({ forklift: v });
+            }}
+            size={300}
             initial={33}
           />
         </View>

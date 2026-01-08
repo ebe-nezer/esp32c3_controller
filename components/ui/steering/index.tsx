@@ -1,10 +1,11 @@
-import React from "react";
+import React, { useCallback, useRef } from "react";
 import { View, StyleSheet, LayoutChangeEvent, Image } from "react-native";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
   runOnJS,
+  useDerivedValue,
 } from "react-native-reanimated";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 
@@ -21,16 +22,42 @@ const SteeringWheel: React.FC<SteeringWheelProps> = ({
   maxAngle = 120,
   onSteer,
 }) => {
-  const angle = useSharedValue(0); // cumulative rotation in radians
+  const angle = useSharedValue(0); // rotation in radians
   const lastAngle = useSharedValue(0);
   const center = useSharedValue({ x: 0, y: 0 });
 
+  // Throttle onSteer to max ~30 calls/sec
+  const lastCallTime = useSharedValue(0);
+  const throttleMs = 33; // ~30 FPS
+
+  // Worklet function to map raw (-1..1) to UI angle
   const mapToUIRange = (raw: number) => {
     "worklet";
-    // raw normalized to -1..1 (±45°)
     const clamped = Math.max(-1, Math.min(1, raw));
     return minAngle + (clamped + 1) * ((maxAngle - minAngle) / 2);
   };
+
+  // Derived values to minimize repeated calculations
+  const raw = useDerivedValue(() => {
+    return angle.value / (Math.PI / 4);
+  });
+
+  const uiAngle = useDerivedValue(() => {
+    return mapToUIRange(raw.value);
+  });
+
+  // Throttled call to onSteer on JS thread
+  const callOnSteerThrottled = useCallback(
+    (angleVal: number, rawVal: number) => {
+      "worklet";
+      const now = Date.now();
+      if (now - lastCallTime.value > throttleMs) {
+        lastCallTime.value = now;
+        if (onSteer) runOnJS(onSteer)(angleVal, rawVal);
+      }
+    },
+    [onSteer]
+  );
 
   const pan = Gesture.Pan()
     .onBegin((event) => {
@@ -43,7 +70,7 @@ const SteeringWheel: React.FC<SteeringWheelProps> = ({
       const dy = event.y - center.value.y;
       const current = Math.atan2(dy, dx);
 
-      // delta between last and current
+      // Calculate delta carefully to handle angular wrapping
       let delta = current - lastAngle.value;
       if (delta > Math.PI) delta -= 2 * Math.PI;
       if (delta < -Math.PI) delta += 2 * Math.PI;
@@ -51,23 +78,19 @@ const SteeringWheel: React.FC<SteeringWheelProps> = ({
       angle.value += delta;
       lastAngle.value = current;
 
-      // normalize rotation → -1..1 relative to 45°
-      const raw = angle.value / (Math.PI / 4);
-      const uiAngle = mapToUIRange(raw);
-
-      if (onSteer) runOnJS(onSteer)(uiAngle, raw);
+      // Throttle JS calls for performance
+      callOnSteerThrottled(uiAngle.value, raw.value);
     })
     .onEnd(() => {
-      // snap back to center (90°) with smoother animation
       angle.value = withSpring(0, { damping: 20, stiffness: 120 });
       if (onSteer) runOnJS(onSteer)(90, 0);
     });
 
   const animatedStyle = useAnimatedStyle(() => {
-    const raw = angle.value / (Math.PI / 4);
-    const uiAngle = mapToUIRange(raw);
     return {
-      transform: [{ rotate: `${uiAngle - 90}deg` }],
+      transform: [{ rotate: `${uiAngle.value - 90}deg` }],
+      // Hardware accelerated layer on Android
+      // No direct prop for this in Reanimated style, must be prop on Animated.View below
     };
   });
 
@@ -84,6 +107,8 @@ const SteeringWheel: React.FC<SteeringWheelProps> = ({
             { width: size, height: size, borderRadius: size / 2 },
             animatedStyle,
           ]}
+          renderToHardwareTextureAndroid // Enable GPU rendering on Android
+          shouldRasterizeIOS // Optimize on iOS
         >
           <Image
             source={require("../../../assets/steering.png")}

@@ -1,16 +1,12 @@
-// RealTimeSlider.tsx
 import React, { useEffect } from "react";
 import { View, StyleSheet } from "react-native";
-import {
-  Gesture,
-  GestureDetector,
-  GestureHandlerRootView,
-} from "react-native-gesture-handler";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   runOnJS,
-  withSpring,
+  withTiming,
+  useDerivedValue,
 } from "react-native-reanimated";
 
 type Props = {
@@ -20,13 +16,10 @@ type Props = {
   thickness?: number;
   vertical?: boolean;
   initial?: number;
-  // MUST be provided - should be very fast (enqueue to buffer / write to socket)
-  sendValue: (v: number, ts: number) => void;
-  // called on gesture end or safety events
-  onComplete?: (v: number) => void;
-  // return-to-value (e.g., 0) when released, set to null to keep at finger
-  returnToValue?: number | null;
-  step?: number; // optional logical step
+  sendValue: (v: number, ts: number) => void; // MUST be fast (enqueue/write)
+  onComplete?: (v: number) => void; // called at gesture end
+  returnToValue?: number | null; // spring back when released
+  step?: number; // optional step size
 };
 
 const DEFAULT_SIZE = 300;
@@ -44,18 +37,14 @@ export default function RealTimeSlider({
   returnToValue = null,
   step = 0,
 }: Props) {
-  // rawValue = exact instantaneous logical value (worklet updated every frame)
   const rawValue = useSharedValue(initial);
-  // animatedValue = follows rawValue with spring for UI
   const animatedValue = useSharedValue(initial);
 
-  // Throttle control: last send timestamp on UI thread
   const lastSentTs = useSharedValue(0);
-  const SEND_INTERVAL_MS = 20; // 50Hz. Adjust to 10ms (100Hz) if your system supports it.
+  const SEND_INTERVAL_MS = 20; // 50Hz throttle
 
-  const trackRange = Math.max(1, size - THUMB_SIZE); // px usable
+  const trackRange = Math.max(1, size - THUMB_SIZE);
 
-  // Move inside component or top-level, but add "worklet"
   const clamp = (v: number, min: number, max: number): number => {
     "worklet";
     return Math.max(min, Math.min(max, v));
@@ -89,18 +78,14 @@ export default function RealTimeSlider({
     return clamp(raw, min, max);
   };
 
-  // JS-side function is provided; we must guard it.
-  // IMPORTANT: ensure sendValue is extremely cheap (enqueue into buffer/socket)
   const safeSendValue = (v: number, ts: number) => {
     try {
       sendValue(v, ts);
     } catch (e) {
-      // swallow, log on JS side (avoid exceptions thrown from runOnJS)
-      // console.warn("sendValue failed", e);
+      // swallow to avoid throwing inside runOnJS
     }
   };
 
-  // Gesture start snapshot in a shared value
   const startPos = useSharedValue(0);
 
   const pan = Gesture.Pan()
@@ -115,85 +100,53 @@ export default function RealTimeSlider({
     })
     .onUpdate((ev) => {
       "worklet";
-      if (vertical) {
-        // --- Vertical handling ---
-        const deltaY = ev.translationY; // invert so up = positive
-        const newPos = Math.max(
-          0,
-          Math.min(trackRange, startPos.value + deltaY)
-        );
-        const newRaw = posToValue(newPos, min, max, trackRange, vertical, step);
+      const delta = vertical ? ev.translationY : ev.translationX;
+      const newPos = Math.max(0, Math.min(trackRange, startPos.value + delta));
+      const newRaw = posToValue(newPos, min, max, trackRange, vertical, step);
 
-        rawValue.value = newRaw;
-        animatedValue.value = withSpring(newRaw, {
-          stiffness: 300,
-          damping: 28,
-        });
+      rawValue.value = newRaw;
+      animatedValue.value = withTiming(newRaw, { duration: 50 });
 
-        const now = Date.now();
-        if (now - lastSentTs.value >= SEND_INTERVAL_MS) {
-          lastSentTs.value = now;
-          runOnJS(safeSendValue)(newRaw, now);
-        }
-      } else {
-        // --- Horizontal handling ---
-        const deltaX = ev.translationX;
-        const newPos = Math.max(
-          0,
-          Math.min(trackRange, startPos.value + deltaX)
-        );
-        const newRaw = posToValue(newPos, min, max, trackRange, vertical, step);
-
-        rawValue.value = newRaw;
-        animatedValue.value = withSpring(newRaw, {
-          stiffness: 300,
-          damping: 28,
-        });
-
-        const now = Date.now();
-        if (now - lastSentTs.value >= SEND_INTERVAL_MS) {
-          lastSentTs.value = now;
-          runOnJS(safeSendValue)(newRaw, now);
-        }
+      const now = Date.now();
+      if (now - lastSentTs.value >= SEND_INTERVAL_MS) {
+        lastSentTs.value = now;
+        runOnJS(safeSendValue)(newRaw, now);
       }
     })
     .onEnd(() => {
       "worklet";
-      // final immediate send (ensure controller receives final)
       const now = Date.now();
       lastSentTs.value = now;
       runOnJS(safeSendValue)(rawValue.value, now);
 
       if (returnToValue !== null && returnToValue !== undefined) {
-        // animate UI spring back, and update raw as well (instant)
         rawValue.value = returnToValue;
-        animatedValue.value = withSpring(returnToValue, {
-          stiffness: 200,
-          damping: 20,
-        });
+        animatedValue.value = withTiming(returnToValue, { duration: 100 });
         runOnJS(safeSendValue)(returnToValue, Date.now());
       }
-      // signal completion on JS thread
+
       if (onComplete) runOnJS(onComplete)(rawValue.value);
     });
 
-  // UI styles driven by animatedValue (NOT rawValue)
+  const ratio = useDerivedValue(
+    () => (animatedValue.value - min) / (max - min)
+  );
+
   const fillStyle = useAnimatedStyle(() => {
-    const ratio = (animatedValue.value - min) / (max - min);
     return vertical
       ? {
           position: "absolute",
           bottom: 0,
           left: 0,
           width: thickness,
-          height: ratio * size,
+          height: ratio.value * size,
           backgroundColor: "#007AFF",
         }
       : {
           position: "absolute",
           left: 0,
           top: 0,
-          width: ratio * size,
+          width: ratio.value * size,
           height: thickness,
           backgroundColor: "#007AFF",
         };
@@ -206,13 +159,15 @@ export default function RealTimeSlider({
           transform: [{ translateY: pos }],
           left: (thickness - THUMB_SIZE) / 2,
         }
-      : { transform: [{ translateX: pos }], top: (thickness - THUMB_SIZE) / 2 };
+      : {
+          transform: [{ translateX: pos }],
+          top: (thickness - THUMB_SIZE) / 2,
+        };
   });
 
-  // If parent updates `initial` externally, bring both values in sync
   useEffect(() => {
     rawValue.value = initial;
-    animatedValue.value = withSpring(initial, { stiffness: 200, damping: 20 });
+    animatedValue.value = withTiming(initial, { duration: 100 });
   }, [initial]);
 
   return (
@@ -226,7 +181,11 @@ export default function RealTimeSlider({
           { overflow: "hidden", borderRadius: 8, backgroundColor: "#ccc" },
         ]}
       >
-        <Animated.View style={fillStyle} />
+        <Animated.View
+          style={fillStyle}
+          renderToHardwareTextureAndroid
+          shouldRasterizeIOS
+        />
         <Animated.View
           style={[
             thumbStyle,
@@ -241,6 +200,8 @@ export default function RealTimeSlider({
               elevation: 4,
             },
           ]}
+          renderToHardwareTextureAndroid
+          shouldRasterizeIOS
         />
       </View>
     </GestureDetector>
